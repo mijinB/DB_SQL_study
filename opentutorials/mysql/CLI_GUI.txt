@@ -1,0 +1,7 @@
+*CLI (Command Lind Interface)
+- 텍스트 기반 인터페이스. 키보드를 통해 명령어를 입력하여 컴퓨터와 상호작용
+
+*GUI (Graphical User Interface)
+- 그래픽 기반 인터페이스. 마우스를 통해 그래픽 요소를 클릭하여 컴퓨터와 상호작용
+
+⇒ CLI & GUI 함꼐 사용 가능.
