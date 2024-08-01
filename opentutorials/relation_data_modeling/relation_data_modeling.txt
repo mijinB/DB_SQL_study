@@ -1,0 +1,209 @@
+[물리적 데이터 모델링]
+- 논리적 데이터 모델링에서 만든 이상적인 표를 구체적인 제품에 맞는 현실적인 표로 만드는 일이다.
+- 물리적 데이터 모델링에서 중요한 것은 성능. (→ 실제로 운영을 해보고 데이터와 처리량이 쌓여봐야 어느 부분에서 느려지는지 알 수 있다.)
+- find slow query "사용하는 제품(ex. MySQL)"으로 검색해서 느려지는 query를 찾는다.
+    → 찾고 나서는 이상적으로 정규화된 표의 구조에 손을 댄다. (denormalization : 역정규화, 반정규화)
+      (역정규화는 혹독한 대가를 치뤄야 한다. 역정규화를 시도하기 전에 다른 방법을 먼저 찾아보는 것이 바람직하다.)
+    → 역정규화 전 다른 방법 : index
+      (행에 대한 읽기 성능을 비약적으로 향상시키지만, 쓰기 성능을 비관적으로 희생시킨다. 쓰기가 이뤄질 때마다 행에 index가 있다면 입력된 정보를 잘 정리정돈 하기위한 복잡한 연산 과정이 필요하기 때문.)
+
+*역정규화 (denormalization)
+⇒ 정규화를 한 후에 역정규화를 하는 것이지, 아예 정규화를 하지 않는 것은 좋은 방법이 아니다. (정규화를 한다고 반드시 성능이 떨어지는 것도 아니다.)
+
+(수업 자료: http://bit.ly/2WLMCko)
+
+    ex.
+        (정규화된 TABLE)
+        author TABLE
+        +----+------+-----------+
+        | id | name | profile   |
+        +----+------+-----------+
+        |  1 | kim  | developer |
+        |  2 | lee  | DBA       |
+        +----+------+-----------+
+
+        topic TABLE
+        +------------+------------------+---------------------+-----------+
+        | title      | description      | created             | author_id |
+        +------------+------------------+---------------------+-----------+
+        | MySQL      | MySQL is ...     | 2011-01-01 00:00:00 |         1 |
+        | ORACLE     | ORACLE is ...    | 2012-02-03 00:00:00 |         1 |
+        | SQL Server | SQL Server is .. | 2013-01-04 00:00:00 |         2 |
+        +------------+------------------+---------------------+-----------+
+        
+        topic_tag_relation TABLE
+        +-------------+--------+
+        | topic_title | tag_id |
+        +-------------+--------+
+        | MySQL       |      1 |
+        | MySQL       |      2 |
+        | ORACLE      |      1 |
+        | ORACLE      |      3 |
+        +-------------+--------+
+
+        tag TABLE
+        +----+------------+
+        | id | name       |
+        +----+------------+
+        |  1 | rdb        |
+        |  2 | free       |
+        |  3 | commercial |
+        +----+------------+
+
+        topic_type TABLE
+        +--------+--------+-------+
+        | title  | type   | price |
+        +--------+--------+-------+
+        | MySQL  | online |     0 |
+        | MySQL  | paper  | 10000 |
+        | ORACLE | online | 15000 |
+        +--------+--------+-------+
+
+- Coloumn의 역정규화_JOIN 줄이기 (Coloumn 중복)
+    ex.
+        SELECT 
+            tag.name
+        FROM topic_tag_relation AS TTR
+        LEFT JOIN tag
+        ON TTR.tag_id = tag.id
+        WHERE topic_title = 'MySQL';
+
+            ⇓ JOIN 줄이기 역정규화 적용 ⇓
+
+        topic_tag_relation TABLE (topic_tag_relation TABLE + tag TABLE)
+        +-------------+--------+------------+
+        | topic_title | tag_id | tag_name   |
+        +-------------+--------+------------+
+        | MySQL       |      1 | rdb        |
+        | MySQL       |      2 | free       |
+        | ORACLE      |      1 | rdb        |
+        | ORACLE      |      3 | commercial |
+        +-------------+--------+------------+
+        SELECT tag.name FROM topic_tag_relation WHERE topic_title = 'MySQL';
+
+- Coloumn의 역정규화_계산작업 줄이기 (파생 Coloumn의 형성)
+  목표: 각각의 저자가 몇 개의 글을 작성했는지를 목록으로 표현한다.
+    ex.
+        SELECT
+            author_id, COUNT(author_id)
+        FROM topic
+        GROUP BY author_id;
+            ↓
+        +-----------+------------------+
+        | author_id | COUNT(author_id) |
+        +-----------+------------------+
+        |         1 |                2 |
+        |         2 |                1 |
+        +-----------+------------------+
+          ↳ GROUP BY가 비싼 작업이 될 수 있다. (행이 많을수록)
+
+            ⇓ 계산작업 줄이기 역정규화 적용 ⇓
+        
+        author TABLE에 각 저자가 몇 개의 글을 썼는지의 count 값을 갖는 column 추가. (글이 +1씩 증가하면 count 값의 column도 +1씩 증가하도록)
+          ↳ ALTER TABLE author ADD COLUMN topic_count INT NULL AFTER profile;
+            UPDATE author SET topic_count = 2 WHERE (id = 1);
+            UPDATE author SET topic_count = 1 WHERE (id = 2);
+            SELECT * FROM author;
+        +----+------+-----------+-------------+
+        | id | name | profile   | topic_count |
+        +----+------+-----------+-------------+
+        |  1 | kim  | developer |           2 |
+        |  2 | lee  | DBA       |           1 |
+        +----+------+-----------+-------------+
+        빠른 처리가 가능해졌지만, topic_count 값을 항상 유지시켜줘야 한다는 어려움이 생긴다. (얻는 것과 잃는 것을 잘 생각해서 선택해야 한다.)
+
+- TABLE의 역정규화_Coloumn을 기준으로 TABLE을 분리
+    ex.
+        topic TABLE
+        +------------+---------------------+-----------+
+        | title      | created             | author_id |
+        +------------+---------------------+-----------+
+        | MySQL      | 2011-01-01 00:00:00 |         1 |
+        | ORACLE     | 2012-02-03 00:00:00 |         1 |
+        | SQL Server | 2013-01-04 00:00:00 |         2 |
+        +------------+---------------------+-----------+
+
+        topic_description
+        +------------+------------------+
+        | title      | description      |
+        +------------+------------------+
+        | MySQL      | MySQL is ...     |
+        | ORACLE     | ORACLE is ...    |
+        | SQL Server | SQL Server is .. |
+        +------------+------------------+
+        이렇게 분리하면 컴퓨터 한대로 하던 일을 여러대가 처리할 수 있게된다.
+        이런 것을 ¹샤딩이라고 하는데, DB를 운영하면서 성능의 한계를 느꼈을 때 scale out하는 기법인데,
+        어렵다. 유지하기도 힘들다. 최후의 수단으로 선택해야 한다.
+          ↳ ¹샤딩(Sharding) : 데이터를 조각내 분산 저장하는 데이터 처리 기법
+
+- TABLE의 역정규화_Row를 기준으로 TABLE을 분리
+    ex.
+        topic_1000
+        +------------+------------------+---------------------+-----------+
+        | title      | description      | created             | author_id |
+        +------------+------------------+---------------------+-----------+
+        | MySQL      | MySQL is ...     | 2011-01-01 00:00:00 |      1000 |
+        | ORACLE     | ORACLE is ...    | 2012-02-03 00:00:00 |      1000 |
+        +------------+------------------+---------------------+-----------+
+
+        topic_1500
+        +------------+------------------+---------------------+-----------+
+        | title      | description      | created             | author_id |
+        +------------+------------------+---------------------+-----------+
+        | SQL Server | SQL Server is .. | 2013-01-04 00:00:00 |      1500 |
+        +------------+------------------+---------------------+-----------+
+        어렵다. 노하우가 필요하고 사고 위험도도 높다. 아주 코너에 몰렸을 때만 사용해야 한다.
+
+- 관계의 역정규화_지름길을 만든다. (JOIN을 줄여서 지름길을 만드는 테크닉)
+  목표: 저자의 태그 아이디와 태그명을 조회한다.
+  현재 TABLE로는 목표 내용을 하려면 topic_tag_relation TABLE과 tag TABLE을 JOIN해야하고 그 결과에 author_id가 없기 때문에 topic TABLE까지 JOIN을 해야한다.
+  이 문제를 낮추는 역정규화 방법이다.
+    ex.
+        SELECT
+            *
+        FROM topic_tag_relation AS TTR
+        LEFT JOIN tag ON TTR.tag_id = tag.id
+        LEFT JOIN topic ON TTR.topic_title = topic.title
+        WHERE author_id=1;
+            ↓
+        +-------------+--------+------+------------+--------+---------------+---------------------+-----------+
+        | topic_title | tag_id | id   | name       | title  | description   | created             | author_id |
+        +-------------+--------+------+------------+--------+---------------+---------------------+-----------+
+        | MySQL       |      1 |    1 | rdb        | MySQL  | MySQL is ...  | 2011-01-01 00:00:00 |         1 |
+        | MySQL       |      2 |    2 | free       | MySQL  | MySQL is ...  | 2011-01-01 00:00:00 |         1 |
+        | ORACLE      |      1 |    1 | rdb        | ORACLE | ORACLE is ... | 2012-02-03 00:00:00 |         1 |
+        | ORACLE      |      3 |    3 | commercial | ORACLE | ORACLE is ... | 2012-02-03 00:00:00 |         1 |
+        +-------------+--------+------+------------+--------+---------------+---------------------+-----------+
+
+            ⇓ 지름길 만들기 역정규화 적용 ⇓
+
+        JOIN 줄이는 지름길 만들기 위해 TABLE Coloumn 추가
+          ↳ ALTER TABLE topic_tag_relation ADD COLUMN author_id INT NULL AFTER tag_id;
+            UPDATE topic_tag_relation SET author_id=1 WHERE topic_title="MySQL" AND tag_id=1;
+            UPDATE topic_tag_relation SET author_id=1 WHERE topic_title="MySQL" AND tag_id=2;
+            UPDATE topic_tag_relation SET author_id=1 WHERE topic_title="ORACLE" AND tag_id=1;
+            UPDATE topic_tag_relation SET author_id=1 WHERE topic_title="ORACLE" AND tag_id=3;
+                ↓
+            topic_tag_relation TABLE
+            +-------------+--------+-----------+
+            | topic_title | tag_id | author_id |
+            +-------------+--------+-----------+
+            | MySQL       |      1 |         1 |
+            | MySQL       |      2 |         1 |
+            | ORACLE      |      1 |         1 |
+            | ORACLE      |      3 |         1 |
+            +-------------+--------+-----------+
+
+        두 번의 JOIN만으로 목표 결과 만들기
+          ↳ SELECT tag_id, tag.name FROM topic_tag_relation AS TTR
+            LEFT JOIN tag ON TTR.tag_id = tag.id
+            WHERE TTR.author_id=1;
+                ↓
+            +--------+------------+
+            | tag_id | name       |
+            +--------+------------+
+            |      1 | rdb        |
+            |      2 | free       |
+            |      1 | rdb        |
+            |      3 | commercial |
+            +--------+------------+
